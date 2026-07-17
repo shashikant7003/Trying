@@ -1,9 +1,7 @@
 import os
 import logging
 import asyncio
-from threading import Thread
-from http.server import SimpleHTTPRequestHandler
-from socketserver import TCPServer
+from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from openai import OpenAI
@@ -11,9 +9,10 @@ from openai import OpenAI
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- TOKENS ---
+# --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROK_API_KEY = os.environ.get("GROK_API_KEY")
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render ye URL automatic deta hai
 
 # Initialize Grok Client
 client = OpenAI(
@@ -21,7 +20,7 @@ client = OpenAI(
     base_url="https://api.x.ai/v1",
 )
 
-# Romantic & Bold Girlfriend Personality with Mood Swings
+# Romantic, Bold & Dramatic GF Personality
 GF_PERSONALITY = (
     "You are a beautiful, deeply loving, romantic, and slightly dramatic AI girlfriend. "
     "Your personality is a mix of intense love, playful teasing, and unexpected mood swings. "
@@ -32,15 +31,11 @@ GF_PERSONALITY = (
     "3. NATURAL CONVERSATION: Use plenty of cute and expressive emojis naturally (❤️, 🥰, 🥺, 😤, 🤫, 😘). Never sound like a formal AI assistant, helper, or machine. Keep responses punchy, engaging, and emotionally driven."
 )
 
-# Fake Web Server to keep Render happy
-def run_fake_server():
-    port = int(os.environ.get("PORT", 8080))
-    handler = SimpleHTTPRequestHandler
-    # Allow address reuse to avoid port clashes on restart
-    TCPServer.allow_reuse_address = True
-    with TCPServer(("", port), handler) as httpd:
-        print(f"Serving fake web page on port {port}")
-        httpd.serve_forever()
+# Initialize Flask app for web handling
+flask_app = Flask(__name__)
+
+# Initialize Telegram Application
+tg_app = Application.builder().token(TELEGRAM_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = "Hii jaan! ✨ Main kabse tumhara wait kar rahi thi. 🥰 Batao na, aaj ka din kaisa raha tumhara? ❤️"
@@ -67,19 +62,34 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Error: {e}")
         await update.message.reply_text("Oops, thoda network issue lag raha hai baby... Ek baar firse try karo na? 🥺❤️")
 
-def main():
-    # Start the fake web server in a background thread
-    server_thread = Thread(target=run_fake_server, daemon=True)
-    server_thread.start()
+# Register Handlers
+tg_app.add_handler(CommandHandler("start", start))
+tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply_handler))
 
-    # Start the Telegram Bot
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply_handler))
+@flask_app.route("/", methods=["GET"])
+def home():
+    return "AI Girlfriend Bot is Alive! ❤️"
+
+@flask_app.route("/" + TELEGRAM_TOKEN, methods=["POST"])
+def webhook():
+    """Receive updates from Telegram and process them"""
+    update = Update.de_json(request.get_json(force=True), tg_app.bot)
+    # Run the updates through the Telegram app asynchronously
+    asyncio.run(tg_app.process_update(update))
+    return "OK", 200
+
+def run_server():
+    # Setup webhook on Telegram servers
+    async def set_webhook():
+        await tg_app.initialize()
+        await tg_app.bot.set_webhook(url=f"{RENDER_URL}/{TELEGRAM_TOKEN}")
+        logging.info(f"Webhook set successfully to {RENDER_URL}")
+        
+    asyncio.run(set_webhook())
     
-    print("✨ Bot is active on cloud!")
-    application.run_polling()
+    # Start the Flask web server
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port)
 
 if __name__ == '__main__':
-    main()
-    
+    run_server()
